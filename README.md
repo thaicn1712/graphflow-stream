@@ -40,6 +40,12 @@ while let Some(event) = rx.recv().await {
 let result = handle.await??; // same TaskResult you'd get from task.run()
 ```
 
+Just want the full streamed text back, no manual loop? One line:
+
+```rust,ignore
+let text = graphflow_stream::collect_text(Arc::new(MyLlmTask), Context::new(), 32).await?;
+```
+
 `emit_token`/`emit_started`/`emit_finished`/`emit_failed` are ambient — call them from anywhere inside `Task::run`, no new trait to implement, no-op if nothing is listening. `spawn_graph(flow_runner, session_id, buffer)` does the same for a whole `FlowRunner` run; `SubgraphTask` wraps a nested `Graph` as one `Task` and streams through automatically.
 
 More examples (`full_graph`, `sse_axum`, `websocket_axum`) in [`examples/`](examples). Benchmarks in [`benches/overhead.rs`](benches/overhead.rs) — ambient `emit_*` costs ~32ns when unobserved.

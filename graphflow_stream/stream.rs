@@ -96,6 +96,21 @@ where
     run_streaming(buffer, async move { task.run(context).await })
 }
 
+pub async fn collect_text<T>(task: Arc<T>, context: Context, buffer: usize) -> Result<String>
+where
+    T: Task + Send + Sync + 'static,
+{
+    let (mut rx, handle) = spawn_task(task, context, buffer);
+    let mut text = String::new();
+    while let Some(event) = rx.recv().await {
+        if let StreamEvent::Token { delta, .. } = event {
+            text.push_str(&delta);
+        }
+    }
+    handle.await.map_err(|e| GraphError::Other(e.into()))??;
+    Ok(text)
+}
+
 pub fn spawn_graph(
     flow_runner: FlowRunner,
     session_id: impl Into<String>,

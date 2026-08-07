@@ -6,7 +6,8 @@ use graph_flow::{
     Task, TaskResult, error::Result,
 };
 use graphflow_stream::{
-    StreamEvent, SubgraphTask, emit_finished, emit_started, emit_token, spawn_graph, spawn_task,
+    StreamEvent, SubgraphTask, collect_text, emit_finished, emit_started, emit_token, spawn_graph,
+    spawn_task,
 };
 
 struct Echo;
@@ -65,6 +66,14 @@ async fn spawn_task_forwards_ambient_emits_and_preserves_result() {
 #[tokio::test]
 async fn emit_without_a_scope_is_a_silent_noop() {
     emit_token("orphan", "nobody is listening").await;
+}
+
+#[tokio::test]
+async fn collect_text_joins_token_deltas_in_order() {
+    let text = collect_text(Arc::new(Echo), Context::new(), 8)
+        .await
+        .unwrap();
+    assert_eq!(text, "hello");
 }
 
 struct Greeter;
