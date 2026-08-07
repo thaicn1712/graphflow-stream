@@ -1,58 +1,24 @@
-//! Token-level streaming for [`graph-flow`](https://docs.rs/graph-flow) agent graphs.
-//!
-//! `graph_flow::Task::run` resolves to a single [`TaskResult`] once a task is
-//! completely done — there is no way for a task to hand out partial output
-//! (e.g. LLM tokens as they arrive) while it is still running. That is fine
-//! for control flow, but it means anything built on `graph-flow` cannot
-//! stream a response to a user the way LangGraph's `astream_events` can.
-//!
-//! `graphflow-stream` adds a parallel [`StreamingTask`] trait: it forwards
-//! incremental [`StreamEvent`]s over a channel *while the task is still
-//! running*, but still returns the same [`TaskResult`] your `NextAction`
-//! control flow (`Continue` / `GoTo` / `WaitForInput` / `End`) already
-//! depends on. Nothing about `graph-flow`'s executor, storage, or graph
-//! building changes — this crate is additive.
-
 use async_trait::async_trait;
 use graph_flow::{error::Result, Context, Task, TaskResult};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-/// Sending half of a stream channel, held by a running [`StreamingTask`].
 pub type StreamSender = mpsc::Sender<StreamEvent>;
-
-/// Receiving half of a stream channel, held by the caller consuming events.
 pub type StreamReceiver = mpsc::Receiver<StreamEvent>;
 
-/// An incremental event emitted by a [`StreamingTask`] while it runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEvent {
-    /// Emitted once, before a task starts doing work.
     TaskStarted { task_id: String },
-    /// A partial chunk of output (e.g. one LLM token or a few characters).
     Token { task_id: String, delta: String },
-    /// Emitted once a task has produced its final [`TaskResult`].
     TaskFinished { task_id: String },
-    /// Emitted if a task returns an error instead of finishing normally.
     TaskFailed { task_id: String, error: String },
 }
 
-/// A [`Task`] that can additionally stream partial output as it runs.
-///
-/// Implement this instead of (or in addition to) [`Task`] for any task that
-/// wraps a streaming LLM call. The final [`TaskResult`] you return still
-/// drives `graph-flow`'s control flow exactly as it does today; `tx` is a
-/// side channel purely for incremental output.
 #[async_trait]
 pub trait StreamingTask: Task {
     async fn run_streaming(&self, context: Context, tx: StreamSender) -> Result<TaskResult>;
 }
 
-/// Wraps any existing [`Task`] so it also satisfies [`StreamingTask`],
-/// emitting only `TaskStarted`/`TaskFinished`/`TaskFailed` around a single
-/// non-streaming [`Task::run`] call. Use this to adopt `graphflow-stream`
-/// incrementally: wrap the tasks you haven't converted yet so a graph can
-/// mix streaming and non-streaming tasks.
 pub struct NonStreaming<T>(pub T);
 
 #[async_trait]
@@ -93,12 +59,6 @@ impl<T: Task> StreamingTask for NonStreaming<T> {
     }
 }
 
-/// Runs a [`StreamingTask`] on a fresh channel, returning the receiving end
-/// immediately and a [`JoinHandle`] resolving to the task's final
-/// [`TaskResult`]. This is the main entry point for driving a single
-/// streaming step: read from the receiver to forward tokens to your caller
-/// (e.g. over SSE or a websocket) while the task keeps running in the
-/// background, then await the handle for the `NextAction` decision.
 pub fn spawn_streaming_task<T>(
     task: std::sync::Arc<T>,
     context: Context,
