@@ -1,1 +1,9 @@
 /target
+
+# agent-memory-kit: local dev tooling, hooks hardcode this machine's absolute
+# path to the kit's venv — not portable to other contributors' machines.
+/.claude/
+/.mcp.json
+/.adr/
+/.planning/
+/.agent-kit/
