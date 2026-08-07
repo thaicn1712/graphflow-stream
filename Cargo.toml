@@ -2,7 +2,7 @@
 name = "graphflow-stream"
 version = "0.1.0"
 edition = "2024"
-description = "Token-level streaming and event bus for LangGraph-style Rust agent graphs"
+description = "LangGraph's astream_events for graph-flow: token-level streaming for Rust agent graphs"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/thaicn1712/graphflow-stream"
@@ -23,3 +23,8 @@ tokio-stream = "0.1"
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
+
+[[bench]]
+name = "overhead"
+harness = false
