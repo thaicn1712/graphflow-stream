@@ -48,7 +48,20 @@ let text = graphflow_stream::collect_text(Arc::new(MyLlmTask), Context::new(), 3
 
 `emit_token`/`emit_started`/`emit_finished`/`emit_failed` are ambient — call them from anywhere inside `Task::run`, no new trait to implement, no-op if nothing is listening. `spawn_graph(flow_runner, session_id, buffer)` does the same for a whole `FlowRunner` run; `SubgraphTask` wraps a nested `Graph` as one `Task` and streams through automatically.
 
-More examples (`full_graph`, `sse_axum`, `websocket_axum`) in [`examples/`](examples). Benchmarks in [`benches/overhead.rs`](benches/overhead.rs) — ambient `emit_*` costs ~32ns when unobserved.
+Replay debugging: `record(rx).await` turns a run into a `Recording` (serializable, so it can be saved to disk), and `recording.replay(buffer)` plays it back on a fresh channel with the original timing — inspect a past run, or demo a UI without hitting an LLM again.
+
+More examples (`full_graph`, `sse_axum`, `websocket_axum`) in [`examples/`](examples).
+
+## Benchmarks
+
+`cargo bench` (criterion, [`benches/overhead.rs`](benches/overhead.rs)):
+
+| Scenario | Time |
+|---|---|
+| `task.run()` direct — no `graphflow-stream` involved | ~1.0 µs |
+| `emit_token()` with nobody listening (ambient no-op) | ~30 ns / call |
+| `spawn_task()` streaming 100 tokens to a draining receiver | ~2.0 µs / token |
+| `record()` capturing 100 streamed tokens | ~1.4 µs / token |
 
 ## License
 

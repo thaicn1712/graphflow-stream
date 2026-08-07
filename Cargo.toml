@@ -14,16 +14,18 @@ path = "graphflow_stream/stream.rs"
 
 [dependencies]
 async-trait = "0.1"
-tokio = { version = "1", features = ["sync", "rt", "macros"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 graph-flow = "0.6"
 futures-core = "0.3"
 tokio-stream = "0.1"
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 criterion = { version = "0.8", features = ["async_tokio"] }
+serde_json = "1"
 
 [[bench]]
 name = "overhead"

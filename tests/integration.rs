@@ -6,8 +6,8 @@ use graph_flow::{
     Task, TaskResult, error::Result,
 };
 use graphflow_stream::{
-    StreamEvent, SubgraphTask, collect_text, emit_finished, emit_started, emit_token, spawn_graph,
-    spawn_task,
+    StreamEvent, SubgraphTask, collect_text, emit_finished, emit_started, emit_token, record,
+    spawn_graph, spawn_task,
 };
 
 struct Echo;
@@ -156,4 +156,31 @@ async fn subgraph_task_runs_inner_graph_and_streams_through_outer_scope() {
     assert_eq!(deltas, vec!["Hi".to_string(), "Bye".to_string()]);
     assert_eq!(result.response, Some("done".to_string()));
     assert_eq!(result.next_action, NextAction::Continue);
+}
+
+#[tokio::test]
+async fn recording_round_trips_through_json_and_replays_in_order() {
+    let task = Arc::new(Echo);
+    let (rx, handle) = spawn_task(task, Context::new(), 16);
+
+    let recording = record(rx).await;
+    handle.await.unwrap().unwrap();
+    assert_eq!(recording.events.len(), 4);
+
+    let json = serde_json::to_string(&recording).unwrap();
+    let restored: graphflow_stream::Recording = serde_json::from_str(&json).unwrap();
+
+    let mut rx = restored.replay(16);
+    let mut replayed = Vec::new();
+    while let Some(event) = rx.recv().await {
+        replayed.push(event);
+    }
+    assert_eq!(
+        replayed,
+        recording
+            .events
+            .into_iter()
+            .map(|r| r.event)
+            .collect::<Vec<_>>()
+    );
 }
