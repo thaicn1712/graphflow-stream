@@ -50,7 +50,7 @@ let text = graphflow_stream::collect_text(Arc::new(MyLlmTask), Context::new(), 3
 
 Replay debugging: `record(rx).await` turns a run into a `Recording` (serializable, so it can be saved to disk), and `recording.replay(buffer)` plays it back on a fresh channel with the original timing — inspect a past run, or demo a UI without hitting an LLM again.
 
-More examples (`full_graph`, `sse_axum`, `websocket_axum`) in [`examples/`](examples).
+More examples (`full_graph`, `sse_axum`, `websocket_axum`, `replay`) in [`examples/`](examples).
 
 ## Benchmarks
 
