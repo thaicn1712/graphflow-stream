@@ -1,11 +1,13 @@
+#![doc = include_str!("../README.md")]
+
 use graph_flow::{
-    error::{GraphError, Result},
     Context, ExecutionResult, ExecutionStatus, FlowRunner, Graph, InMemorySessionStorage,
     NextAction, Session, SessionStorage, Task, TaskResult,
+    error::{GraphError, Result},
 };
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 

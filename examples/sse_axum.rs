@@ -2,15 +2,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
+    Router,
     response::sse::{Event, KeepAlive, Sse},
     routing::get,
-    Router,
 };
 use futures_core::Stream;
-use graph_flow::{error::Result, Context, NextAction, Task, TaskResult};
-use graphflow_stream::{emit_token, spawn_task, StreamEvent};
-use tokio_stream::wrappers::ReceiverStream;
+use graph_flow::{Context, NextAction, Task, TaskResult, error::Result};
+use graphflow_stream::{StreamEvent, emit_token, spawn_task};
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 
 struct Greeting;
 
@@ -32,8 +32,8 @@ impl Task for Greeting {
     }
 }
 
-async fn stream_handler() -> Sse<impl Stream<Item = std::result::Result<Event, std::convert::Infallible>>>
-{
+async fn stream_handler()
+-> Sse<impl Stream<Item = std::result::Result<Event, std::convert::Infallible>>> {
     let (rx, _handle) = spawn_task(Arc::new(Greeting), Context::new(), 16);
     let stream = ReceiverStream::new(rx).map(|event| {
         let data = match event {

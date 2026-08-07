@@ -1,5 +1,10 @@
 # graphflow-stream
 
+[![crates.io](https://img.shields.io/crates/v/graphflow-stream.svg)](https://crates.io/crates/graphflow-stream)
+[![docs.rs](https://docs.rs/graphflow-stream/badge.svg)](https://docs.rs/graphflow-stream)
+[![CI](https://github.com/thaicn1712/graphflow-stream/actions/workflows/ci.yml/badge.svg)](https://github.com/thaicn1712/graphflow-stream/actions/workflows/ci.yml)
+[![license](https://img.shields.io/crates/l/graphflow-stream.svg)](LICENSE)
+
 Token-level streaming for [`graph-flow`](https://crates.io/crates/graph-flow) agent graphs — the missing piece between [Rig](https://crates.io/crates/rig-core)'s streaming LLM completions and `graph-flow`'s LangGraph-style step executor.
 
 ## The gap

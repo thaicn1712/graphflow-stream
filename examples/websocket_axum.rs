@@ -2,13 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
+    Router,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
     routing::get,
-    Router,
 };
-use graph_flow::{error::Result, Context, NextAction, Task, TaskResult};
-use graphflow_stream::{emit_token, spawn_task, StreamEvent};
+use graph_flow::{Context, NextAction, Task, TaskResult, error::Result};
+use graphflow_stream::{StreamEvent, emit_token, spawn_task};
 
 struct Greeting;
 
