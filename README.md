@@ -50,7 +50,35 @@ let text = graphflow_stream::collect_text(Arc::new(MyLlmTask), Context::new(), 3
 
 Replay debugging: `record(rx).await` turns a run into a `Recording` (serializable, so it can be saved to disk), and `recording.replay(buffer)` plays it back on a fresh channel with the original timing — inspect a past run, or demo a UI without hitting an LLM again.
 
-More examples (`full_graph`, `sse_axum`, `websocket_axum`, `replay`) in [`examples/`](examples).
+## Orchestration: map over a runtime list, vote across runs
+
+`graph_flow`'s built-in `FanOutTask` runs a fixed set of children decided at construction time. `DynamicMapTask` covers what LangGraph's `Send` API covers in Python — fan out over however many items `context` holds *this run* (one child per retrieved document, one per subtask an LLM just planned):
+
+```rust,ignore
+use graphflow_stream::DynamicMapTask;
+
+let map_task = DynamicMapTask::new("summarize_retrieved", |ctx: &Context| {
+    let docs: Vec<String> = ctx.get("retrieved_docs").unwrap_or_default();
+    docs.into_iter()
+        .map(|doc_id| Arc::new(SummarizeDoc { doc_id }) as Arc<dyn Task>)
+        .collect()
+}).with_prefix("summaries");
+
+map_task.run(context).await?; // writes summaries.<doc_id>.response for each doc
+```
+
+`EnsembleTask` runs the same task several times concurrently and reduces the responses — self-consistency prompting, sample an LLM call a few times and combine instead of trusting one draw:
+
+```rust,ignore
+use graphflow_stream::{EnsembleTask, majority_vote};
+
+let ensemble = EnsembleTask::new("classify_intent", ClassifyIntent, 5, majority_vote);
+let result = ensemble.run(context).await?; // most common of 5 concurrent runs
+```
+
+`majority_vote` ships built in; pass any `Fn(Vec<String>) -> String` for a custom reducer (join, longest, an LLM-as-judge pick).
+
+More examples (`full_graph`, `sse_axum`, `websocket_axum`, `replay`, `map_and_ensemble`) in [`examples/`](examples).
 
 ## Benchmarks
 
@@ -62,6 +90,8 @@ More examples (`full_graph`, `sse_axum`, `websocket_axum`, `replay`) in [`exampl
 | `emit_token()` with nobody listening (ambient no-op) | ~30 ns / call |
 | `spawn_task()` streaming 100 tokens to a draining receiver | ~2.0 µs / token |
 | `record()` capturing 100 streamed tokens | ~1.4 µs / token |
+| `DynamicMapTask::run`, 10 items | ~239 µs |
+| `EnsembleTask::run`, 5 runs | ~215 µs |
 
 ## License
 

@@ -1,6 +1,6 @@
 [package]
 name = "graphflow-stream"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "LangGraph's astream_events for graph-flow: token-level streaming for Rust agent graphs"
 license = "MIT"

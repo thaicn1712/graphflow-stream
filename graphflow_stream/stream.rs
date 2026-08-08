@@ -255,3 +255,218 @@ pub async fn record(mut rx: StreamReceiver) -> Recording {
     }
     Recording { events }
 }
+
+fn map_key(prefix: &Option<String>, child_id: &str, field: &str) -> String {
+    match prefix {
+        Some(p) => format!("{p}.{child_id}.{field}"),
+        None => format!("map.{child_id}.{field}"),
+    }
+}
+
+/// Fans out over a list of child tasks built from `context` at run time — the
+/// same shape as `graph_flow::fanout::FanOutTask`, except the number and
+/// identity of children isn't fixed until the task actually runs. This is
+/// what LangGraph's `Send` API covers in Python: "run this step once per
+/// item in a list I only know at runtime" (once per retrieved document, once
+/// per subtask an LLM just planned out), which a construction-time `Vec` of
+/// children can't express.
+pub struct DynamicMapTask<F> {
+    id: String,
+    children_fn: F,
+    prefix: Option<String>,
+    next_action: NextAction,
+}
+
+impl<F> DynamicMapTask<F>
+where
+    F: Fn(&Context) -> Vec<Arc<dyn Task>> + Send + Sync,
+{
+    /// `children_fn` inspects `context` and returns the child tasks to run
+    /// concurrently this time — typically one per item in a list `context`
+    /// already holds.
+    pub fn new(id: impl Into<String>, children_fn: F) -> Self {
+        Self {
+            id: id.into(),
+            children_fn,
+            prefix: None,
+            next_action: NextAction::Continue,
+        }
+    }
+
+    /// Store aggregated child results under `<prefix>.<child_id>.response`
+    /// instead of the default `map.<child_id>.response`.
+    pub fn with_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefix = Some(prefix.into());
+        self
+    }
+
+    pub fn with_next_action(mut self, next_action: NextAction) -> Self {
+        self.next_action = next_action;
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl<F> Task for DynamicMapTask<F>
+where
+    F: Fn(&Context) -> Vec<Arc<dyn Task>> + Send + Sync,
+{
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, context: Context) -> Result<TaskResult> {
+        let children = (self.children_fn)(&context);
+        let mut set = tokio::task::JoinSet::new();
+
+        for child in children {
+            let ctx = context.clone();
+            set.spawn(async move {
+                let child_id = child.id().to_string();
+                (child_id, child.run(ctx).await)
+            });
+        }
+
+        let mut first_error = None;
+        let mut completed = 0usize;
+
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Err(join_err) => {
+                    first_error.get_or_insert_with(|| {
+                        GraphError::TaskExecutionFailed(format!(
+                            "DynamicMapTask child join error: {join_err}"
+                        ))
+                    });
+                }
+                Ok((child_id, Err(e))) => {
+                    first_error.get_or_insert_with(|| {
+                        GraphError::TaskExecutionFailed(format!(
+                            "DynamicMapTask child '{child_id}' failed: {e}"
+                        ))
+                    });
+                }
+                Ok((child_id, Ok(result))) => {
+                    if let Some(response) = result.response {
+                        context.set(map_key(&self.prefix, &child_id, "response"), response)?;
+                    }
+                    completed += 1;
+                }
+            }
+        }
+
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+
+        let summary = format!(
+            "DynamicMapTask '{}' mapped over {completed} item(s)",
+            self.id
+        );
+        Ok(TaskResult::new(Some(summary), self.next_action.clone()))
+    }
+}
+
+/// Runs the same [`Task`] `runs` times concurrently and reduces the
+/// responses into one — self-consistency prompting: sample an LLM call
+/// several times (usually with temperature > 0) and combine the answers
+/// instead of trusting a single draw.
+pub struct EnsembleTask<T, R> {
+    id: String,
+    inner: Arc<T>,
+    runs: usize,
+    reducer: R,
+    next_action: NextAction,
+}
+
+impl<T, R> EnsembleTask<T, R>
+where
+    T: Task + 'static,
+    R: Fn(Vec<String>) -> String + Send + Sync,
+{
+    /// Run `inner` `runs` times (at least 1) and combine the responses with `reducer`.
+    pub fn new(id: impl Into<String>, inner: T, runs: usize, reducer: R) -> Self {
+        Self {
+            id: id.into(),
+            inner: Arc::new(inner),
+            runs: runs.max(1),
+            reducer,
+            next_action: NextAction::Continue,
+        }
+    }
+
+    pub fn with_next_action(mut self, next_action: NextAction) -> Self {
+        self.next_action = next_action;
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl<T, R> Task for EnsembleTask<T, R>
+where
+    T: Task + 'static,
+    R: Fn(Vec<String>) -> String + Send + Sync,
+{
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, context: Context) -> Result<TaskResult> {
+        let mut set = tokio::task::JoinSet::new();
+        for _ in 0..self.runs {
+            let inner = self.inner.clone();
+            let ctx = context.clone();
+            set.spawn(async move { inner.run(ctx).await });
+        }
+
+        let mut responses = Vec::with_capacity(self.runs);
+        let mut first_error = None;
+
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Err(join_err) => {
+                    first_error.get_or_insert_with(|| {
+                        GraphError::TaskExecutionFailed(format!(
+                            "EnsembleTask run join error: {join_err}"
+                        ))
+                    });
+                }
+                Ok(Err(e)) => {
+                    first_error.get_or_insert_with(|| {
+                        GraphError::TaskExecutionFailed(format!("EnsembleTask run failed: {e}"))
+                    });
+                }
+                Ok(Ok(result)) => {
+                    if let Some(response) = result.response {
+                        responses.push(response);
+                    }
+                }
+            }
+        }
+
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+
+        let combined = (self.reducer)(responses);
+        Ok(TaskResult::new(Some(combined), self.next_action.clone()))
+    }
+}
+
+/// A ready-made [`EnsembleTask`] reducer: the most common response wins,
+/// ties broken by whichever came first. Fits self-consistency prompting,
+/// where every run should converge on the same discrete answer.
+pub fn majority_vote(responses: Vec<String>) -> String {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for response in responses {
+        match counts.iter_mut().find(|(r, _)| *r == response) {
+            Some(entry) => entry.1 += 1,
+            None => counts.push((response, 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(response, _)| response)
+        .unwrap_or_default()
+}

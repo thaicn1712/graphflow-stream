@@ -3,7 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use graph_flow::{Context, NextAction, Task, TaskResult, error::Result};
-use graphflow_stream::{emit_token, record, spawn_task};
+use graphflow_stream::{
+    DynamicMapTask, EnsembleTask, emit_token, majority_vote, record, spawn_task,
+};
 use tokio::runtime::Runtime;
 
 struct Silent;
@@ -90,11 +92,64 @@ fn bench_record_100_tokens(c: &mut Criterion) {
     });
 }
 
+struct MapItem {
+    item: String,
+}
+
+#[async_trait]
+impl Task for MapItem {
+    fn id(&self) -> &str {
+        &self.item
+    }
+
+    async fn run(&self, _context: Context) -> Result<TaskResult> {
+        Ok(TaskResult::new(
+            Some(self.item.clone()),
+            NextAction::Continue,
+        ))
+    }
+}
+
+fn bench_dynamic_map_task_10_items(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let context = Context::new();
+    context
+        .set(
+            "items",
+            (0..10).map(|i| format!("item_{i}")).collect::<Vec<_>>(),
+        )
+        .unwrap();
+    let map_task = DynamicMapTask::new("map", |ctx: &Context| {
+        let items: Vec<String> = ctx.get("items").unwrap_or_default();
+        items
+            .into_iter()
+            .map(|item| Arc::new(MapItem { item }) as Arc<dyn Task>)
+            .collect()
+    });
+
+    c.bench_function("DynamicMapTask::run, 10 items", |b| {
+        b.to_async(&rt)
+            .iter(|| async { map_task.run(context.clone()).await.unwrap() });
+    });
+}
+
+fn bench_ensemble_task_5_runs(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let ensemble = EnsembleTask::new("ensemble", Silent, 5, majority_vote);
+
+    c.bench_function("EnsembleTask::run, 5 runs", |b| {
+        b.to_async(&rt)
+            .iter(|| async { ensemble.run(Context::new()).await.unwrap() });
+    });
+}
+
 criterion_group!(
     benches,
     bench_baseline_no_streaming,
     bench_emit_with_no_listener,
     bench_spawn_task_with_listener,
-    bench_record_100_tokens
+    bench_record_100_tokens,
+    bench_dynamic_map_task_10_items,
+    bench_ensemble_task_5_runs
 );
 criterion_main!(benches);

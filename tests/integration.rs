@@ -6,8 +6,8 @@ use graph_flow::{
     Task, TaskResult, error::Result,
 };
 use graphflow_stream::{
-    StreamEvent, SubgraphTask, collect_text, emit_finished, emit_started, emit_token, record,
-    spawn_graph, spawn_task,
+    DynamicMapTask, EnsembleTask, StreamEvent, SubgraphTask, collect_text, emit_finished,
+    emit_started, emit_token, majority_vote, record, spawn_graph, spawn_task,
 };
 
 struct Echo;
@@ -183,4 +183,140 @@ async fn recording_round_trips_through_json_and_replays_in_order() {
             .map(|r| r.event)
             .collect::<Vec<_>>()
     );
+}
+
+struct SummarizeItem {
+    item: String,
+}
+
+#[async_trait]
+impl Task for SummarizeItem {
+    fn id(&self) -> &str {
+        &self.item
+    }
+
+    async fn run(&self, _context: Context) -> Result<TaskResult> {
+        Ok(TaskResult::new(
+            Some(format!("summary of {}", self.item)),
+            NextAction::Continue,
+        ))
+    }
+}
+
+fn summarize_all_docs(context: &Context) -> Vec<Arc<dyn Task>> {
+    let docs: Vec<String> = context.get("docs").unwrap_or_default();
+    docs.into_iter()
+        .map(|item| Arc::new(SummarizeItem { item }) as Arc<dyn Task>)
+        .collect()
+}
+
+#[tokio::test]
+async fn dynamic_map_task_fans_out_over_a_runtime_list_and_aggregates() {
+    let context = Context::new();
+    context
+        .set(
+            "docs",
+            vec![
+                "doc_a".to_string(),
+                "doc_b".to_string(),
+                "doc_c".to_string(),
+            ],
+        )
+        .unwrap();
+
+    let map_task =
+        DynamicMapTask::new("summarize_all", summarize_all_docs).with_prefix("summaries");
+
+    let result = map_task.run(context.clone()).await.unwrap();
+    assert_eq!(result.next_action, NextAction::Continue);
+
+    let a: Option<String> = context.get("summaries.doc_a.response");
+    let b: Option<String> = context.get("summaries.doc_b.response");
+    let c: Option<String> = context.get("summaries.doc_c.response");
+    assert_eq!(a, Some("summary of doc_a".to_string()));
+    assert_eq!(b, Some("summary of doc_b".to_string()));
+    assert_eq!(c, Some("summary of doc_c".to_string()));
+}
+
+#[tokio::test]
+async fn dynamic_map_task_scales_with_however_many_items_are_in_context() {
+    let map_task = DynamicMapTask::new("summarize_all", summarize_all_docs);
+
+    let one_doc = Context::new();
+    one_doc.set("docs", vec!["only".to_string()]).unwrap();
+    let result = map_task.run(one_doc).await.unwrap();
+    assert!(result.response.unwrap().contains("mapped over 1 item"));
+
+    let five_docs = Context::new();
+    five_docs
+        .set("docs", (0..5).map(|i| format!("d{i}")).collect::<Vec<_>>())
+        .unwrap();
+    let result = map_task.run(five_docs).await.unwrap();
+    assert!(result.response.unwrap().contains("mapped over 5 item"));
+}
+
+struct VotingTask {
+    counter: Arc<std::sync::atomic::AtomicUsize>,
+    answers: Vec<&'static str>,
+}
+
+#[async_trait]
+impl Task for VotingTask {
+    fn id(&self) -> &str {
+        "voting_task"
+    }
+
+    async fn run(&self, _context: Context) -> Result<TaskResult> {
+        let i = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let answer = self.answers[i % self.answers.len()];
+        Ok(TaskResult::new(
+            Some(answer.to_string()),
+            NextAction::Continue,
+        ))
+    }
+}
+
+#[tokio::test]
+async fn ensemble_task_reduces_multiple_runs_via_majority_vote() {
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let inner = VotingTask {
+        counter,
+        answers: vec!["yes", "yes", "no"],
+    };
+    let task = EnsembleTask::new("vote", inner, 3, majority_vote);
+
+    let result = task.run(Context::new()).await.unwrap();
+    assert_eq!(result.response, Some("yes".to_string()));
+}
+
+#[tokio::test]
+async fn ensemble_task_runs_at_least_once_even_if_zero_requested() {
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let inner = VotingTask {
+        counter: counter.clone(),
+        answers: vec!["only"],
+    };
+    let task = EnsembleTask::new("vote", inner, 0, majority_vote);
+
+    let result = task.run(Context::new()).await.unwrap();
+    assert_eq!(result.response, Some("only".to_string()));
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn ensemble_task_with_custom_reducer_joins_responses() {
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let inner = VotingTask {
+        counter,
+        answers: vec!["a", "b"],
+    };
+    let task = EnsembleTask::new("join", inner, 2, |responses: Vec<String>| {
+        responses.join(",")
+    });
+
+    let result = task.run(Context::new()).await.unwrap();
+    let response = result.response.unwrap();
+    assert!(response.contains('a') && response.contains(','));
 }
